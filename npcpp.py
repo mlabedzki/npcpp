@@ -84,18 +84,31 @@ class compiler():
     def cppFunction(self, code):
         return cppFunction(code, alt_path=self.PATH)
 
-def wrap_function(lib, funcname, restype, argtypes):
-    """Simplify wrapping ctypes functions"""
-    func = lib.__getattr__(funcname)
-    func.restype = restype
-    func.argtypes = argtypes
-    return func
-
-class vectd(ctypes.Structure):
-    #_fields_ = [('arr', ctypes.POINTER(ctypes.c_double)), ('size', ctypes.c_int)]
-    _fields_ = [('arr', ctypes.POINTER(ctypes.c_double)), ('size', ctypes.c_int)]
+class vecti(ctypes.Structure):
+    #np.ctypeslib.ndpointer(dtype=ctypes.c_double, shape=(n,))    
     #_fields_ = [('arr', ctypes.c_void_p), ('size', ctypes.c_int)]
-    #np.ctypeslib.ndpointer(dtype=ctypes.c_double, shape=(n,))
+    _fields_ = [('arr', ctypes.POINTER(ctypes.c_int)), ('size', ctypes.c_int)]
+    # Add a slot to store the reference to the original numpy array  
+    _numpy_ref = None 
+    def __repr__(self):
+        return '({0}, {1})'.format(self.arr, self.size)       
+    @classmethod
+    def fromnp(cls, a):
+        # Create a contiguous copy that will own the memory
+        a_c = np.ascontiguousarray(a, dtype=ctypes.c_int) #due to different length of int64 and c_int
+        # Create the instance
+        instance = cls(a_c.ctypes.data_as(ctypes.POINTER(ctypes.c_int)), len(a_c))
+        # FIX: Store a reference to the numpy array instance to keep it alive
+        instance._numpy_ref = a_c 
+        return instance
+    @classmethod
+    def li(cls,l):
+        return cls((ctypes.c_int * len(l))(*l),len(l))
+    def tonp(cls):
+        return np.array(cls.arr[0:cls.size])   
+    
+class vectd(ctypes.Structure):
+    _fields_ = [('arr', ctypes.POINTER(ctypes.c_double)), ('size', ctypes.c_int)]
     def __repr__(self):
         return '({0}, {1})'.format(self.arr, self.size)       
     @classmethod
@@ -106,20 +119,7 @@ class vectd(ctypes.Structure):
         return cls((ctypes.c_double * len(l))(*l),len(l))
     def tonp(cls):
         return np.array(cls.arr[0:cls.size])
-    
-class vecti(ctypes.Structure):
-    _fields_ = [('arr', ctypes.POINTER(ctypes.c_int)), ('size', ctypes.c_int)]
-    def __repr__(self):
-        return '({0}, {1})'.format(self.arr, self.size)       
-    @classmethod
-    def fromnp(cls, a):
-        return cls(a.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),len(a))
-    @classmethod
-    def li(cls,l):
-        return cls((ctypes.c_int * len(l))(*l),len(l))
-    def tonp(cls):
-        return np.array(cls.arr[0:cls.size])    
-
+   
 class vectb(ctypes.Structure):
     _fields_ = [('arr', ctypes.POINTER(ctypes.c_bool)), ('size', ctypes.c_int)]
     def __repr__(self):
@@ -145,6 +145,13 @@ class vectll(ctypes.Structure):
         return cls((ctypes.c_longlong * len(l))(*l),len(l))
     def tonp(cls):
         return np.array(cls.arr[0:cls.size]) 
+
+def wrap_function(lib, funcname, restype, argtypes):
+    """Simplify wrapping ctypes functions"""
+    func = lib.__getattr__(funcname)
+    func.restype = restype
+    func.argtypes = argtypes
+    return func
 
 def makelib(name,sys_type=None,alt_path=None):
     pathfilename = os.path.join(os.getcwd(), name)
@@ -264,7 +271,7 @@ def translate(input_list):
         'bool*': 'POINTER(c_bool)',
         '_Bool': 'c_bool',
         'char': 'c_char',
-        'char*': 'POINTER(c_char_p)',
+        'char*': 'c_char_p',
         'double': 'c_double',
         'double*': 'POINTER(c_double)',
         'float': 'c_float',
@@ -358,7 +365,9 @@ def make_ext(name,sys_type=0):#the main parsing function
     i=0
     while i < len(data):
         if data[i][0]!='#' and data[i].find("npcpp::export") != -1:
+            continues = False
             vectors = []
+            vects = []
             fargs = []
             fargs_types = []
             fargs_names = []
@@ -370,27 +379,47 @@ def make_ext(name,sys_type=0):#the main parsing function
             if header.find('std::vector') != -1:
                 vectors.append(0)            
                 header = replace_all_types(header)
+            if header.find('vect<') != -1:#needed?
+                vects.append(0)           #needed?  
             file.write(header)               
             firstline = data[i]
             #check if there are arguments
             firstline = firstline.split('(')
-            if len(firstline) > 1: #no ( case
+            if len(firstline) > 1: #both fname and argnames in 1 line
                 if len(firstline[1]) > 0 and firstline[1]!='\n': #longer line case
-                    fargs.append(firstline[1].replace('{', '').replace(')', '').split(','))
+                    firstline_args = firstline[1].replace('{', '').replace(')', '').split(',')
+                    if firstline_args[len(firstline_args )-1] == '\n':
+                        firstline_args = firstline_args[0:(len(firstline_args)-1)]
+                        continues = True
+                    elif ('\n' in firstline_args[len(firstline_args )-1]) and (')' not in firstline[1]):
+                        continues = True
+                    fargs.append(firstline_args)
                     #for case when function line is 1-liner
                     fargs=fargs[0] #newline as we had [list]
                     for j in range(0,len(fargs)):
                         altfarg = replace_all_types(fargs[j])
+                        file.write(altfarg)
                         if j!=len(fargs)-1:
-                            file.write(altfarg+',')
+                            file.write(',')
+                        elif continues:
+                            pass
                         else:
-                            file.write(altfarg+'){')         
+                            file.write('){')
             if data[i].find(')') == -1:
                 while data[i].find(')') == -1: #loop for arguments here
                     i+=1
-                    if data[i][0]!=')':
+                    #data_i = data[i].split(')')
+                    #if len(data_i)==0:
+                        
+                    if data[i].lstrip().find(')') != 0:
+                        if continues:
+                            file.write(',')
+                            continues = False
                         fargs.extend(do_argument_line(data[i],file))
                 file.write(')\n{\n')
+            if continues:
+                pass#file.write(',')
+                #continues = False
             #special case for last argument, the one with ')'
             if data[i].find(')') != -1:
                 if data[i].find('{') == -1: #if begin sign is not present move one extra
@@ -415,12 +444,14 @@ def make_ext(name,sys_type=0):#the main parsing function
                         fargs_names.append(z[0])
                     if argtype.find('vector') != -1:                        
                         arg = 'arr2vec('+z[1]+')'
-                        vectors.append(j+1)                            
+                        vectors.append(j+1)
                     else:
                         if len(z)>1:    
                             arg = z[1]
                         else:
                             arg = z[0]
+                    if argtype.find('vect<') != -1:
+                        vects.append(j+1)
                     if j==0:
                         file.write(arg)
                     else:
@@ -430,7 +461,7 @@ def make_ext(name,sys_type=0):#the main parsing function
                 else:
                     file.write(');\n')                    
                 file.write('}\n')
-            newcodes.append([fname,translate(ftype)[0],translate(fargs_types),fargs_names,vectors])
+            newcodes.append([fname,translate(ftype)[0],translate(fargs_types),fargs_names,vectors,vects])
         else:
             i+=1
     file.close()
@@ -440,28 +471,28 @@ def list2str(somelist):
     return '['+', '.join(somelist)+']'
 
 def make_wrapper(filename,codes):
-    if not codes[4]:
+    if (not codes[4]) and (not codes[5]):
         return codes[0]+' = wrap_function('+filename+', \'_'+codes[0]+'\', '+codes[1]+', '+list2str(codes[2])+')'
     else:
         return codes[0]+'_ = wrap_function('+filename+', \'_'+codes[0]+'\', '+codes[1]+', '+list2str(codes[2])+')'
 
-def np_wrap(arg_types,arguments,vectors):
+def np_wrap(arg_types,arguments,vectors,vects):
     newcodes = []
     i=0
     for a in arguments:
         i+=1        
-        if i in vectors:
+        if (i in vectors) or (i in vects):
             newcodes.append(arg_types[i-1]+'.fromnp('+a.split('=')[0]+')')
         else:#
             newcodes.append(a.split('=')[0])
     return ', '.join(newcodes)        
     
 def make_np_wrapper(codes):
-    if 0 in codes[4]:
+    if (0 in codes[4]) or (0 in codes[5]):
         end = '.tonp()'
     else:
         end = ''
-    return 'def '+codes[0]+'('+', '.join(codes[3])+'):\n\treturn '+codes[0]+'_('+np_wrap(codes[2],codes[3],codes[4])+')'+end
+    return 'def '+codes[0]+'('+', '.join(codes[3])+'):\n\treturn '+codes[0]+'_('+np_wrap(codes[2],codes[3],codes[4],codes[5])+')'+end
 
 def getSystem():
     if sys.platform == "win32":
@@ -527,7 +558,7 @@ def prepImport(name,recompile=True,alt_path=None):
         file.write("handle = "+libname+"._handle\n")
         for code in newcodes:
             file.write(make_wrapper(libname,code)+'\n')
-            if code[4]:
+            if code[4] or code[5]:
                 file.write(make_np_wrapper(code)+'\n')
             #exec(code)
         file.write("file = open('"+filename+"_handle_tmp.txt', 'w')\n")
@@ -537,7 +568,7 @@ def prepImport(name,recompile=True,alt_path=None):
     return libname, proc
 
 #below sourceCpp version wraps on the fly instead of creating more files
-#loadAll works in py2 normally and in py3 when exported function doesnt have vector args and doesnt return vector
+#loadAll and hence sourceCppSimple work in py2 normally and in py3 only when exported function doesnt have vector args and doesnt return vector
 def sourceCppSimple(name,recompile=True,alt_path=None):
     return Namespace(**loadAll(name,recompile=recompile,alt_path=alt_path))
 
@@ -629,25 +660,37 @@ def load_dynamic_module_from_file(file_path):
         raise
 
 #
-# USE EXAMPLE
+# GENERAL INSTRUCTIONS OF USE:
 #
-# #in Linux we may safely assume that gcc compiler is present
-# #in Windows when mingw compiler is present and it is in one of 2 default dirs then it is possible to stright use npcpp.sourceCpp function calls 
-# #first change working directory as it is reference for whole library:
+# 1. the npcpp packages provides instant wrappers of vectorized and non vectorized C++ functions
+# and Python/numpy, both exported function and the arguemnts may be either scalar variables or vectors
+# 2. the prefered type of vectors for C++ in vectorized function cases is std::vector<> which is mapped into numpy array
+# 3. it is possible to compile file also with types such as vect<> struct internally created in this packages
+# or C array (like double*), but the lattter is not recomended as it require further tweaks after wrapping the function,
+# 4. all variable types that are compatible are types written as 1 word, exception is long long type, in case of pointers it should also be 1 word, e.g. int*.
+# 5. if compilation is done on cpp file then all exported functions should have
+# before their first line a meta-comment containing 'npcpp::export'
+# 6. arguments definitions in C++ code are expected to be either all in the same line as function name,
+# or they should be separeted by new line signs, i.e. each argument in a separate line.
+#
+# USE EXAMPLE:
+#
+# #in Linux we may safely assume that gcc compiler is present,
+# #in Windows when mingw compiler is present and it is in one of 2 default dirs then it is possible to just use npcpp.sourceCpp function calls, 
+# #first change working directory as it is a reference point for the whole library:
 #
 # import npcpp
 # os.setdir(path_to_cpp_file)
 #
-# #then compilation is possible once function to be exported is saved in cpp file with a line preceeding function definition containing export comment: //npcpp::export 
+# #then compilation is possible once function to be exported is saved in cpp file with the line preceeding function definition containing export comment: //npcpp::export 
 # hofstadterq = npcpp.sourceCpp("hofstadterq.cpp")
 #
-# #when there is custom compiler or mingw is in different location then it is possible to define path for the library by means of class:
-# #before first use:
+# #when there is a custom compiler or mingw is in different location then it is possible to define the path for the library by means of class, before the first use create an instance:
 # cpp = npcpp.compiler(your_mingw_bin_path)
-# #then path is defined when calling functions as method of cpp object:
+# #then the compiler path is already defined when calling functions as method of cpp object:
 # hofstadterq = cpp.sourceCpp("hofstadterq.cpp")
 #
-# #alternatively it is possible to compile from cpp code inside string like here, export comment will be auto added:
+# #alternatively, it is possible to compile from a cpp code inside string like here, the export meta comment will be auto added:
 # hofstadterq = npcpp.cppFunction("""
 # //https://en.wikipedia.org/wiki/Hofstadter_sequence
 # std::vector<long long> generateHofstadterQSequence(int n) {
@@ -670,12 +713,12 @@ def load_dynamic_module_from_file(file_path):
 # }
 # """)
 #
-# #after function is compiled, then it is possible to use the function:
+# #after the function is compiled, it is possible to use the function by following call:
 # out = hofstadterq.generateHofstadterQSequence(10**7)
 # print(out[10**7-1])
 #
-# #by defult after compiling once, cpp file may be recompiled by using the same call
-# #if there is need to delete dll or stop using it after it is connected to python then without closing console it can be done as:
+# #by defult after compiling once, the cpp file may be recompiled using the same call
+# #if there is a need to delete the dll file or stop using it after it is connected to python then without closing the console it can be done as:
 # npcpp.deloadlib(hofstadterq)
 #
 # #npcpp.cppFunction saves cpp code from string into temp.cpp in the same folder
