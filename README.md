@@ -73,7 +73,7 @@ out = hofstadterq.generateHofstadterQSequence(10**7)
 print(out[10**7-1])
 ```
 
-by default after compiling once, the cpp file may be recompiled using the same call
+by default after compiling once, the cpp file may be recompiled using the same call, 
 if there is a need to delete the dll file or stop using it after it is connected to python then without closing the console it can be done as:
 
 ``` Python
