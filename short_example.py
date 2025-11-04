@@ -4,16 +4,18 @@ import time
 os.chdir(r'C:\Users\mlabedzki\Documents\Python')
 import npcpp
 
-# first install either Rcpp package through Rstudio, which should install compiler here:
-# mingw_bin_path = r"C:\RBuildTools\rtools42\x86_64-w64-mingw32.static.posix\bin"
-# or download from github a release of Dev-Cpp IDE with compiler in 7z portable format:
+# if C++ compiler is present (e.g. from other installations like VS C++ or Rcpp RBuildTools)
+# then find its bin folder and save the path to it as compiler_path,
+# if compiler is not present then download from github a release of Dev-Cpp IDE with mingw compiler in 7z portable format:
 # https://github.com/Embarcadero/Dev-Cpp/releases/download/v6.3/Embarcadero_Dev-Cpp_6.3_TDM-GCC_9.2_Portable.7z
-# unpack then provide path such as:
-# mingw_bin_path = r'C:\Users\mlabedzki\Downloads\Embarcadero_Dev-Cpp\TDM-GCC-64\bin"
-# in my case I have full install so I am using below address:
-mingw_bin_path = r"C:\Program Files (x86)\Embarcadero\Dev-Cpp\TDM-GCC-64\bin"
+# unpack it, then provide path such as:
+# compiler_path = r'C:\Users\mlabedzki\Downloads\Embarcadero_Dev-Cpp\TDM-GCC-64\bin"
+# or if RStudio is present install Rcpp package through it, which should install compiler here:
+# compiler_path = r"C:\RBuildTools\rtools42\x86_64-w64-mingw32.static.posix\bin"
 
-cpp = npcpp.compiler(mingw_bin_path)
+compiler_path = r"C:\Program Files (x86)\Embarcadero\Dev-Cpp\TDM-GCC-64\bin"
+
+cpp = npcpp.compiler(compiler_path)
 
 hofstadterq = cpp.cppFunction("""
 //https://en.wikipedia.org/wiki/Hofstadter_sequence
